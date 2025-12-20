@@ -23,7 +23,6 @@ find_package(jsoncpp REQUIRED)
 # Generate executable
 add_executable(Orbit_Simulator 
     main.cpp
-    src/Functions.cpp
     src/Simulator.cpp
 )
 

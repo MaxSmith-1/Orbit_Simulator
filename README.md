@@ -12,4 +12,4 @@ Steps for Compiling on Windows:
 
 3. Cd into executable folder and run (Orbit_Simulator.exe)
 
-Demo Run: Orbit_Simulator.exe 10110.447864 config/Spacecraft/demo_spacecraft.json config/Bodies/earth.json 
+Demo Run: Orbit_Simulator.exe 20110.447864 config/Spacecraft/demo_spacecraft.json config/Bodies/earth.json 

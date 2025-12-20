@@ -16,6 +16,7 @@
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/odeint/stepper/generation/generation_runge_kutta_dopri5.hpp>
 #include <boost/numeric/odeint/external/eigen/eigen_algebra.hpp>
+#include <Functions.h>
 
 using namespace boost::numeric::odeint;
 
@@ -30,16 +31,19 @@ Simulator::Simulator(double tf, Json::Value spacecraft, Json::Value body){
     // Set up initial state
     state.resize(6);
 
-    state << spacecraft["initial_condition"]["ecei_position"][0].asDouble(),
-             spacecraft["initial_condition"]["ecei_position"][1].asDouble(),
-             spacecraft["initial_condition"]["ecei_position"][2].asDouble(),
-             spacecraft["initial_condition"]["ecei_velocity"][0].asDouble(),
-             spacecraft["initial_condition"]["ecei_velocity"][1].asDouble(),
-             spacecraft["initial_condition"]["ecei_velocity"][2].asDouble();
+    state << spacecraft["initial_condition"]["eci_position"][0].asDouble(),
+             spacecraft["initial_condition"]["eci_position"][1].asDouble(),
+             spacecraft["initial_condition"]["eci_position"][2].asDouble(),
+             spacecraft["initial_condition"]["eci_velocity"][0].asDouble(),
+             spacecraft["initial_condition"]["eci_velocity"][1].asDouble(),
+             spacecraft["initial_condition"]["eci_velocity"][2].asDouble();
 
     
     abs_tol = spacecraft["abs_tol"].asDouble();
     rel_tol = spacecraft["rel_tol"].asDouble();
+
+    burn_counter = 0;
+    num_burns = spacecraft["burns"].size();
 
     // states.push_back(state);
     
@@ -48,6 +52,7 @@ Simulator::Simulator(double tf, Json::Value spacecraft, Json::Value body){
 
     // time.push_back(0);
 
+    
 }
 
 
@@ -66,7 +71,7 @@ void Simulator::simulate(){
     // Integrate the ode function until tf or until collision event
     try{
         integrate_adaptive( make_controlled< error_stepper_type >( abs_tol , rel_tol ) , 
-                    ode_func , state , 0.0 , tf , 0.01, [this]( const Eigen::VectorXd &state , double t ) {
+                    ode_func , state , 0.0 , tf , 0.01, [this](Eigen::VectorXd &state , double t ) {
                                 this->observe( state , t );
                             });
                         }
@@ -80,18 +85,39 @@ void Simulator::simulate(){
     write_output(time, states, derived_states);
 }
 
-void Simulator::observe(const Eigen::VectorXd &state , double t){
+void Simulator::observe(Eigen::VectorXd &state , double t){
     
     Eigen::VectorXd derived_state = build_derived_state(state);
     derived_states.push_back(derived_state);
     states.push_back( state );
     time.push_back( t );
 
+    // Check for collision event
     if (std::hypot(state[0], state[1], state[2]) < body["radius"].asDouble()){
-
         throw std::runtime_error("Spacecraft impacted the central body surface.");
+    }
 
+    // Check for burn events
+    if(t >= spacecraft["burns"][burn_counter]["time"].asDouble() && burn_counter < num_burns){
 
+        std::cout << "Execuring burn at [" << spacecraft["burns"][burn_counter]["delta_v_rtn"][0].asDouble() <<
+        ", " << spacecraft["burns"][burn_counter]["delta_v_rtn"][1].asDouble() << ", " <<
+        spacecraft["burns"][burn_counter]["delta_v_rtn"][2].asDouble() << "] (rtn) km/s at t = " << 
+        spacecraft["burns"][burn_counter]["time"].asDouble() << std::endl;
+
+        std::vector<double> delta_v_rtn_vec = {
+        spacecraft["burns"][burn_counter]["delta_v_rtn"][0].asDouble(),
+        spacecraft["burns"][burn_counter]["delta_v_rtn"][1].asDouble(),
+        spacecraft["burns"][burn_counter]["delta_v_rtn"][2].asDouble()
+        };
+
+        Eigen::Vector3d delta_v_eci(Functions::rtn_to_eci_delta_v(state, delta_v_rtn_vec));
+        
+        state[3] += delta_v_eci[0];
+        state[4] += delta_v_eci[1];
+        state[5] += delta_v_eci[2];
+
+        burn_counter++;
     }
 }
 
@@ -107,7 +133,7 @@ void Simulator::ode_function(const Eigen::VectorXd &x, Eigen::VectorXd &dxdt, co
     dxdt[1] = x[4];
     dxdt[2] = x[5];
 
-    r = std::hypot(std::hypot(x[0], x[1]), x[2]);
+    double r = std::hypot(std::hypot(x[0], x[1]), x[2]);
 
     dxdt[3] = -(mu / std::pow(r, 3)) * x[0];
     dxdt[4] = -(mu / std::pow(r, 3)) * x[1];
@@ -124,9 +150,11 @@ Eigen::VectorXd Simulator::build_derived_state(Eigen::VectorXd state){
 
     // DERIVED STATES TO CALCULATE
     // a,e,i,raan, omega, f, E, M, n, p, h, flight path angle
+    Eigen::Vector3d r_vec(state[0], state[1], state[2]);
+    Eigen::Vector3d v_vec(state[3], state[4], state[5]);
 
-    double v = std::hypot(std::hypot(state[3], state[4]), state[5]);
-
+    double r = r_vec.norm();  
+    double v = v_vec.norm();
     // Specific energy (vis-viva) equation 
     double Energy = (std::pow(v, 2) / 2) - (mu / r);
 
@@ -140,9 +168,6 @@ Eigen::VectorXd Simulator::build_derived_state(Eigen::VectorXd state){
     double T = 2*M_PI/n;
 
     // Angular Momentum Vector
-    Eigen::Vector3d r_vec(state[0], state[1], state[2]);
-    Eigen::Vector3d v_vec(state[3], state[4], state[5]);
-
     Eigen::Vector3d h_vec = r_vec.cross(v_vec);
     double h = h_vec.norm();
 
@@ -218,7 +243,7 @@ void Simulator::write_output(std::vector<double>& time,
 
     // Hardcoded headers
     const std::vector<std::string> state_headers = {
-        "r_x", "r_y", "r_z", "v_x", "v_y", "v_z"
+        "ECI_X", "ECI_Y", "ECI_Z", "Vx", "Vy", "Vz"
     };
     
     const std::vector<std::string> derived_headers = {

@@ -9,7 +9,6 @@
 
 
 
-
 class Simulator
 {
 
@@ -30,11 +29,13 @@ class Simulator
 
     double abs_tol;
     double rel_tol;
+    int burn_counter;
+    int num_burns;
 
     // Gravitational Constant
     double G = 6.674e-20;
     double mu;
-    double r;
+
 
     // Initialize state vectors
     Eigen::VectorXd state;
@@ -53,7 +54,7 @@ class Simulator
     // Function that calculates derived state values on each simulation loop
     Eigen::VectorXd build_derived_state(Eigen::VectorXd state);
 
-    void observe(const Eigen::VectorXd &state , double t );
+    void observe(Eigen::VectorXd &state , double t );
 
     // Function that writes states to output csv
     void write_output(std::vector<double>& time, std::vector<Eigen::VectorXd>& states, std::vector<Eigen::VectorXd>& derived_states);
