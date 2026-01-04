@@ -18,15 +18,23 @@
 #include <boost/numeric/odeint/external/eigen/eigen_algebra.hpp>
 #include <Functions.h>
 
+#include "Nrlmsise00.hpp"
+#include <ctime>
+
 using namespace boost::numeric::odeint;
 
 
-Simulator::Simulator(double tf, Json::Value spacecraft, Json::Value body){
+Simulator::Simulator(double tf, Json::Value spacecraft, Json::Value central_body)
+: atmos_flags(), nrlmsise00(atmos_flags)
+{
+    atmos_flags.fill(0);
+
+
     this->tf = tf;
     this->spacecraft = spacecraft;
-    this->body = body;
+    this->central_body = central_body;
 
-    mu = G*body["mass"].asDouble();
+    mu = G*central_body["mass"].asDouble();
 
     // Set up initial state
     state.resize(6);
@@ -45,30 +53,42 @@ Simulator::Simulator(double tf, Json::Value spacecraft, Json::Value body){
     burn_counter = 0;
     num_burns = spacecraft["burns"].size();
 
-    // states.push_back(state);
+    // Use ctime to get the day of the year for the current unix timestep
+    time_t total_seconds = static_cast<time_t>(spacecraft["date"].asDouble());
+    struct tm *now = std::gmtime(&total_seconds);
     
-    // Eigen::VectorXd derived_state = build_derived_state(state);
-    // derived_states.push_back(derived_state);
+    // Create a copy of the time struct and reset to Jan 1st 00:00:00
+    struct tm start_of_year = *now;
+    start_of_year.tm_mon = 0;      // January
+    start_of_year.tm_mday = 1;     // 1st
+    start_of_year.tm_hour = 0;
+    start_of_year.tm_min = 0;
+    start_of_year.tm_sec = 0;
 
-    // time.push_back(0);
+
+
+    #ifdef _WIN32
+        this->year_start_unix = static_cast<double>(_mkgmtime(&start_of_year));
+    #else
+        this->year_start_unix = static_cast<double>(timegm(&start_of_year));
+    #endif
 
     
 }
 
-
 void Simulator::simulate(){
 
     // Define rk45 solver to work with Eigen library vectors
-
     typedef runge_kutta_dopri5<Eigen::VectorXd, double, Eigen::VectorXd, double, vector_space_algebra> error_stepper_type;
 
-    // Wrap the member function in a lambda
+    // Wrap the ode function in a lambda
     auto ode_func = [this](const Eigen::VectorXd& x, Eigen::VectorXd& dxdt, const double t) {
         this->ode_function(x, dxdt, t);
     };
 
 
-    // Integrate the ode function until tf or until collision event
+    // Integrate the ode function until tf or until collision event (detected in observe)
+    // Also record states vs. time through observe function
     try{
         integrate_adaptive( make_controlled< error_stepper_type >( abs_tol , rel_tol ) , 
                     ode_func , state , 0.0 , tf , 0.01, [this](Eigen::VectorXd &state , double t ) {
@@ -81,19 +101,23 @@ void Simulator::simulate(){
         std::cout << "Spacecraft impacted the central body surface." << std::endl;
 
     }
+
     // Wtite outputs to csv
     write_output(time, states, derived_states);
 }
 
 void Simulator::observe(Eigen::VectorXd &state , double t){
     
-    Eigen::VectorXd derived_state = build_derived_state(state);
+    // Build derived state from current state
+    Eigen::VectorXd derived_state = build_derived_state(state, t);
+
+    // Save current time, state, and derived states into respective vectors 
     derived_states.push_back(derived_state);
     states.push_back( state );
     time.push_back( t );
 
     // Check for collision event
-    if (std::hypot(state[0], state[1], state[2]) < body["radius"].asDouble()){
+    if (std::hypot(state[0], state[1], state[2]) < central_body["radius"].asDouble()){
         throw std::runtime_error("Spacecraft impacted the central body surface.");
     }
 
@@ -103,8 +127,9 @@ void Simulator::observe(Eigen::VectorXd &state , double t){
         std::cout << "Execuring burn at [" << spacecraft["burns"][burn_counter]["delta_v_rtn"][0].asDouble() <<
         ", " << spacecraft["burns"][burn_counter]["delta_v_rtn"][1].asDouble() << ", " <<
         spacecraft["burns"][burn_counter]["delta_v_rtn"][2].asDouble() << "] (rtn) km/s at t = " << 
-        spacecraft["burns"][burn_counter]["time"].asDouble() << std::endl;
+        t << std::endl;
 
+        // Convert burn in rtn frame to eci frame
         std::vector<double> delta_v_rtn_vec = {
         spacecraft["burns"][burn_counter]["delta_v_rtn"][0].asDouble(),
         spacecraft["burns"][burn_counter]["delta_v_rtn"][1].asDouble(),
@@ -113,6 +138,7 @@ void Simulator::observe(Eigen::VectorXd &state , double t){
 
         Eigen::Vector3d delta_v_eci(Functions::rtn_to_eci_delta_v(state, delta_v_rtn_vec));
         
+        // Add delta-v to current velocity state
         state[3] += delta_v_eci[0];
         state[4] += delta_v_eci[1];
         state[5] += delta_v_eci[2];
@@ -124,29 +150,74 @@ void Simulator::observe(Eigen::VectorXd &state , double t){
 // Function that gets called on every simulation loop
 void Simulator::ode_function(const Eigen::VectorXd &x, Eigen::VectorXd &dxdt, const double t){
 
+    // Initialize derivitive vector
     dxdt = Eigen::VectorXd(x) * 0.0;
-    // TODO: add perturbations and burns
 
+    // Define utility variables
+    Eigen::Vector3d r_vec(x[0], x[1], x[2]);
+    Eigen::Vector3d v_vec(x[3], x[4], x[5]);
+    double r = r_vec.norm();
 
-    // Two Body problem
+    // Calculate velocity of spacecraft relative to spinning earth
+    Eigen::Vector3d omega_earth(0, 0, 7.292115e-5);
+    Eigen::Vector3d v_rel = v_vec - omega_earth.cross(r_vec);
+    
+
+    // DRAG acceleration
+    // Current total Unix time
+    double current_unix = spacecraft["date"].asDouble() + t;
+    
+    // Calculate fractional DOY (0.0 = Jan 1 00:00:00)
+    int doy = (current_unix - this->year_start_unix) / 86400;
+    
+    // Build NRLMSISE-00 inputs 
+    std::vector<double> atmosphere_state = build_atmosphere_state(x, r, t);
+
+    // TODO: Input all geomagnetic AP conditions
+    std::array<double, 7> aps;
+    aps.fill(atmosphere_state[5]);
+
+    // Call NRLMSISE-00 class to output density, ignore if above alt limit
+    double density = 0.0;
+
+    if(atmosphere_state[1] < 999){
+
+        density = nrlmsise00.density(doy, atmosphere_state[0],
+                  atmosphere_state[1], atmosphere_state[2], atmosphere_state[3],
+                atmosphere_state[4], atmosphere_state[5], aps); // density in kg/m^3
+        }
+
+    // Project drag force to negative relative velocity vector direction
+    Eigen::Vector3d F_drag = -0.5*spacecraft["reference_area"].asDouble()*spacecraft["cd"].asDouble()*density*std::pow(v_rel.norm(), 2)*v_rel.normalized();
+    
+    std::cout << F_drag << std::endl;
+    // Divide by satellite mass for total drag acceleration
+    Eigen::Vector3d a_drag = F_drag / spacecraft["mass"].asDouble();
+
+    // J2 acceleration
+    double J2_coefficient = (1.5*central_body["J2"].asDouble()*mu*std::pow(central_body["equatorial_radius"].asDouble(), 2)) / std::pow(r, 5);
+
+    double J2_x = J2_coefficient*x[0]*((5*std::pow(x[2], 2) / std::pow(r, 2)) - 1);
+    double J2_y = J2_coefficient*x[1]*((5*std::pow(x[2], 2) / std::pow(r, 2)) - 1);
+    double J2_z = J2_coefficient*x[2]*((5*std::pow(x[2], 2) / std::pow(r, 2)) - 3);
+
+    // TODO: Add gravitational effect of Moon and Jupiter
+    // TODO: Add solar radiation pressure
+
+    // Add perturbing forces to two-body problem and integrate
     dxdt[0] = x[3];
     dxdt[1] = x[4];
     dxdt[2] = x[5];
 
-    double r = std::hypot(std::hypot(x[0], x[1]), x[2]);
-
-    dxdt[3] = -(mu / std::pow(r, 3)) * x[0];
-    dxdt[4] = -(mu / std::pow(r, 3)) * x[1];
-    dxdt[5] = -(mu / std::pow(r, 3)) * x[2];
-
-    // Eigen::VectorXd derived_state = build_derived_state(x);
-
-    // derived_states.push_back(derived_state);
+    dxdt[3] = (-(mu / std::pow(r, 3)) * x[0]) + a_drag[0] + J2_x;
+    dxdt[4] = (-(mu / std::pow(r, 3)) * x[1]) + a_drag[1] + J2_y;
+    dxdt[5] = (-(mu / std::pow(r, 3)) * x[2]) + a_drag[2] + J2_z;
 
 }
 
 // Function that calculates derived state values on each simulation loop
-Eigen::VectorXd Simulator::build_derived_state(Eigen::VectorXd state){
+// TODO: Convert angular orbital parameters to degrees
+Eigen::VectorXd Simulator::build_derived_state(Eigen::VectorXd state, double t){
 
     // DERIVED STATES TO CALCULATE
     // a,e,i,raan, omega, f, E, M, n, p, h, flight path angle
@@ -222,16 +293,86 @@ Eigen::VectorXd Simulator::build_derived_state(Eigen::VectorXd state){
         omega = 2.0 * M_PI - omega;
     }
 
-    Eigen::VectorXd derived_state(25);
+    // LLA
+    std::vector<double> lla_calc = lla(state, r, t);
+    double lat = lla_calc[0];
+    double lon = lla_calc[1];
+    double alt = lla_calc[2];
+
+    Eigen::VectorXd derived_state(28);
 
     derived_state << v, r, Energy, a, n, T, h, h_vec[0], h_vec[1], h_vec[2], 
                  e, e_vec[0], e_vec[1], e_vec[2], p, ra, rp, 
-                 b, f, E, M, gamma, i, laan, omega;
-
+                 b, f, E, M, gamma, i, laan, omega,
+                 lat, lon, alt;
+ 
     return derived_state;
 
 }
 
+
+// Function that builds nrlmsise-00 inputs at every time step
+std::vector<double> Simulator::build_atmosphere_state(Eigen::VectorXd state, double r, double t){
+
+    /*
+        void CNrlmsise00::gtd7d(const int doy, const double sec, const double& alt,
+                 const double& g_lat, const double& g_long, const double& lst, const double f107A, const double f107,
+                 std::array<double,7>& ap, std::array<double,9>& d, std::array<double,2>& t)
+
+    */
+
+    double sec = spacecraft["initial_condition"]["seconds"].asInt() + t;
+
+    // Calculate lla
+    std::vector<double> lla_calc = lla(state, r, t);
+
+    // Convert lat/lon to degrees
+    double alt = lla_calc[2];
+    double lat = lla_calc[0] * 180 / M_PI;
+    double lon = lla_calc[1] * 180 / M_PI;
+
+
+    // Get solar profile
+    double f107a = spacecraft["initial_condition"]["f107a"].asDouble();
+    double f107 = spacecraft["initial_condition"]["f107"].asDouble();
+    double ap = spacecraft["initial_condition"]["ap"].asDouble();
+
+
+    return { sec, alt, lat, lon, f107a, f107, ap } ;
+
+} 
+
+std::vector<double> Simulator::lla(Eigen::VectorXd state, double r, double t){
+
+    
+    double julian_days = ((spacecraft["date"].asDouble() + t) / 86400) + 2440587.5;
+    double era = 2*M_PI*(0.7790572732640 + 1.00273781191135448*(julian_days - 2451545.0));
+
+    era = std::fmod(era, 2*M_PI);
+
+    // Calculate geocentric latitude and longitude
+    double lat_geocentric = std::asin(state[2] / r);
+    double lon = std::atan2(state[1], state[0]) - era;
+
+    // Calculate geodetic latitude
+    double lat = std::atan((std::pow(central_body["equatorial_radius"].asDouble(), 2) / std::pow(central_body["polar_radius"].asDouble(), 2))*std::tan(lat_geocentric));
+
+    
+    // Shift longitude to be clocked from International Date Line
+    lon = std::fmod(lon, 2*M_PI);
+    if(lon < 0){
+        lon += 2*M_PI;
+    }
+    // WGS84 model for earth's oblate radius 
+    double oblate_radius = std::sqrt((std::pow(std::pow(central_body["equatorial_radius"].asDouble(), 2)*std::cos(lat), 2) + std::pow(std::pow(central_body["polar_radius"].asDouble(), 2)*std::sin(lat), 2))
+                        / (std::pow(central_body["equatorial_radius"].asDouble()*std::cos(lat), 2) + std::pow(central_body["polar_radius"].asDouble()*std::sin(lat), 2)));
+
+    // Calculate altitude
+    double alt = r - oblate_radius;
+
+    return {lat, lon, alt};
+
+}
 // Function that writes states to output csv
 void Simulator::write_output(std::vector<double>& time, 
                   std::vector<Eigen::VectorXd>& states, 
@@ -249,7 +390,8 @@ void Simulator::write_output(std::vector<double>& time,
     const std::vector<std::string> derived_headers = {
         "v", "r", "E", "a", "n", "T", "h", "h_x", "h_y", "h_z", 
         "e", "e_x", "e_y", "e_z", "p", "ra", "rp", 
-        "b", "f", "E_anom", "M", "gamma", "i", "laan", "omega"
+        "b", "f", "E_anom", "M", "gamma", "i", "laan", "omega",
+        "lat", "lon", "alt"
     };
     
     // Create output directory if it doesn't exist

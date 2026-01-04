@@ -4,10 +4,10 @@ Steps for Compiling on WSL:
 
 1. Download conan: ```pip install conan```
 
-2. Use conan to install dependencies: ```conan install .. --output-folder=. --build=missing --profile=../mingw_profile
-```
+2. Use conan to install dependencies: ```conan install .. --output-folder=. --build=missing --profile=../linux_profile
 
-2. Compile: ```cmake ..``` then ```make -j``` 
+
+2. Compile: ```cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Debug``` then ```make -j``` 
 
 3. Cd into root directory and to run ```./executable/Orbit_Simulator```
 
