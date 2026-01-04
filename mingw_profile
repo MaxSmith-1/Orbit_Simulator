@@ -3,8 +3,14 @@ arch=x86_64
 build_type=Release
 compiler=gcc
 compiler.libcxx=libstdc++11
-compiler.version=15
+compiler.version=13
 os=Windows
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Unix Makefiles
+
 [buildenv]
-CC=C:/msys64/mingw64/bin/gcc.exe 
-CXX=C:/msys64/mingw64/bin/g++.exe
+CC=x86_64-w64-mingw32-gcc
+CXX=x86_64-w64-mingw32-g++
+AR=x86_64-w64-mingw32-ar
+RANLIB=x86_64-w64-mingw32-ranlib

@@ -1,0 +1,21 @@
+{
+    "name": "Demo_Spacecraft",
+    "country": "U.S.A",
+    "mass": 1000,
+    "reference_area": 10, 
+    "cd": 0.5,  
+    "date": 1767400865,
+    "initial_condition": {
+        "day of year": 100,
+        "seconds": 100,
+        "f107a": 80,
+        "f107": 80,
+        "ap": 10,
+        "eci_position": [10000, 1, 1], 
+        "eci_velocity": [1, 6.31, 0]
+    },
+    "abs_tol": 1e-12,
+    "rel_tol": 1e-12
+}
+
+

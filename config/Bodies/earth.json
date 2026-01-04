@@ -2,5 +2,8 @@
     "name": "earth",
     "mass": 5.97e24,
     "radius": 6378,
+    "polar_radius": 6356,
+    "equatorial_radius": 6278,
     "J2": 1e-3
+
 }

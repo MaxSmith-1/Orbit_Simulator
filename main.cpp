@@ -12,15 +12,16 @@ int main(int argc, char* argv[]){
 
     std::cout << "Welcome to the Orbit Simulator" <<std::endl;
 
+    // Read in inputs
     int tf = std::stoi(argv[1]);
-
     std::string spacecraft = argv[2];
     std::string central_body = argv[3];
 
     std::cout << "Loading Json inputs" << std::endl;
 
     Json::Value spacecraft_json, body_json;
-
+    
+    // Load data from json files
     try{
         std::ifstream input1(spacecraft);
         std::ifstream input2(central_body);
