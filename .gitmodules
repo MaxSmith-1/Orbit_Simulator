@@ -1,0 +1,3 @@
+[submodule "dependencies/nrlmsise-00"]
+	path = dependencies/nrlmsise-00
+	url = https://github.com/user/nrlmsise-00.git
