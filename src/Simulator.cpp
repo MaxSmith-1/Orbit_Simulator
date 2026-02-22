@@ -379,9 +379,10 @@ void Simulator::ode_function(const Eigen::VectorXd &x, Eigen::VectorXd &dxdt, co
     //     }
 
     //     // TODO: Convert coordinates from ICRF to ECI (Right now, just assuming these reference frames are the same)
-    //     alt_accel_x += -1 * alternate_bodies_mu[i] / coordinates[i][0];
-    //     alt_accel_y += -1 * alternate_bodies_mu[i] / coordinates[i][1];
-    //     alt_accel_z += -1 * alternate_bodies_mu[i] / coordinates[i][2];
+    //     alt_r = std::pow((std::pow(coordinates[i][0], 2) + std::pow(coordinates[i][0], 2) + std::pow(coordinates[i][0], 2)), 0.5)
+    //     alt_accel_x += -1 * (alternate_bodies_mu[i] / std::pow(alt_r, 3)) * coordinates[i][0];
+    //     alt_accel_y += -1 * (alternate_bodies_mu[i] / std::pow(alt_r, 3)) * coordinates[i][1];
+    //     alt_accel_z += -1 * (alternate_bodies_mu[i] / std::pow(alt_r, 3)) * coordinates[i][2];
 
     // }
 
